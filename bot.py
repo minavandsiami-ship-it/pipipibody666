@@ -4,14 +4,12 @@ import random
 import sqlite3
 import threading
 import requests
-import asyncio
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Используем переменные окружения для Heroku
 BOT_TOKEN = os.environ.get('BOT_TOKEN', '8141267399:AAHAxiUAhRkH3OdbkFh1LLzhYhkSoMzF0eU')
 ADMIN_ID = int(os.environ.get('ADMIN_ID', '8358340380'))
 CRYPTO_TOKEN = os.environ.get('CRYPTO_TOKEN', '438215:AAq9wq4oxOdokPWnWkVD9CxIKOG5eMXztcl')
@@ -163,7 +161,6 @@ texts = {
 
 def init_db_and_folders():
     try:
-        # Создаем папки для файлов
         os.makedirs(os.path.join(BASE_DIR, '2004'), exist_ok=True)
         os.makedirs(os.path.join(BASE_DIR, '2005'), exist_ok=True)
         os.makedirs(os.path.join(BASE_DIR, '2006'), exist_ok=True)
@@ -217,26 +214,6 @@ def init_db_and_folders():
         logging.error(f"Error initializing database: {e}")
         raise
 
-async def check_crypto_token():
-    for attempt in range(3):
-        try:
-            headers = {'Crypto-Pay-API-Token': CRYPTO_TOKEN}
-            response = requests.get(f'{CRYPTO_API_URL}/getMe', headers=headers, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            if data['ok']:
-                logging.info(f"@CryptoBot token valid: {data['result']['name']}")
-                return True
-            else:
-                logging.error(f"Invalid @CryptoBot token: {data.get('error')}")
-                return False
-        except Exception as e:
-            logging.error(f"Error checking @CryptoBot token (attempt {attempt + 1}): {e}")
-            if attempt < 2:
-                await asyncio.sleep(4 * (2 ** attempt))
-            else:
-                raise
-
 async def get_currency_info(crypto):
     try:
         headers = {'Crypto-Pay-API-Token': CRYPTO_TOKEN}
@@ -278,6 +255,7 @@ async def get_exchange_rate(crypto):
         return None
 
 async def create_crypto_invoice(user_id, usd_amount, crypto, context: ContextTypes.DEFAULT_TYPE):
+    import asyncio
     for attempt in range(3):
         try:
             currency_info = await get_currency_info(crypto)
@@ -835,8 +813,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     c.execute('SELECT user_id FROM users')
                     keys_info = ''
                     for row in c.fetchall():
-                        user_id = row[0]
-                        keys_info += texts[language]['keys_info'].format(user_id=user_id, addr_btc='N/A', addr_ltc='N/A', addr_usdt='N/A')
+                        uid = row[0]
+                        keys_info += texts[language]['keys_info'].format(user_id=uid, addr_btc='N/A', addr_ltc='N/A', addr_usdt='N/A')
                     keyboard = [[InlineKeyboardButton(texts[language]['back'], callback_data='admin')]]
                     reply_markup = InlineKeyboardMarkup(keyboard)
                     await query.edit_message_text(keys_info or "No keys found.", reply_markup=reply_markup)
@@ -856,10 +834,10 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     c.execute('SELECT t.user_id, t.amount, t.timestamp, t.crypto, u.first_name, u.last_name, u.username FROM topups t JOIN users u ON t.user_id = u.user_id ORDER BY t.timestamp DESC')
                     topups_info = ''
                     for row in c.fetchall():
-                        user_id, amount, timestamp, crypto, first_name, last_name, username = row
+                        uid, amount, timestamp, crypto, first_name, last_name, username = row
                         username = username if username else 'None'
                         crypto = crypto if crypto else 'Manual'
-                        topups_info += texts[language]['topup_log'].format(user_id=user_id, first_name=first_name, last_name=last_name, username=username, amount=amount, crypto=crypto, timestamp=timestamp)
+                        topups_info += texts[language]['topup_log'].format(user_id=uid, first_name=first_name, last_name=last_name, username=username, amount=amount, crypto=crypto, timestamp=timestamp)
                     keyboard = [[InlineKeyboardButton(texts[language]['back'], callback_data='admin')]]
                     reply_markup = InlineKeyboardMarkup(keyboard)
                     await query.edit_message_text(topups_info or 'No top-ups found.', reply_markup=reply_markup)
@@ -1011,41 +989,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(texts[language]['invalid_quantity'], reply_markup=reply_markup)
             context.user_data.clear()
 
-async def main():
-    try:
-        if not await check_crypto_token():
-            raise Exception("Invalid @CryptoBot token. Please check CRYPTO_TOKEN.")
-        
-        init_db_and_folders()
-        application = Application.builder().token(BOT_TOKEN).read_timeout(15).connect_timeout(15).build()
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CallbackQueryHandler(button))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        application.job_queue.run_once(init_products, when=5)
-        application.job_queue.run_repeating(check_pending_invoices, interval=60, first=10)
-        await application.initialize()
-        await application.start()
-        await application.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True, poll_interval=1.0, timeout=30)
-        logging.info("Polling started, bot is running...")
-        while True:
-            await asyncio.sleep(3600)
-    except Exception as e:
-        logging.error(f"Error starting bot: {e}")
-        raise
-    finally:
-        logging.info("Shutting down application...")
-        try:
-            await application.updater.stop()
-            await application.stop()
-            await application.shutdown()
-        except Exception as e:
-            logging.error(f"Error shutting down application: {e}")
-
 if __name__ == '__main__':
-    import asyncio
     try:
-        asyncio.run(main())
+        headers = {'Crypto-Pay-API-Token': CRYPTO_TOKEN}
+        response = requests.get(f'{CRYPTO_API_URL}/getMe', headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        if data['ok']:
+            logging.info(f"@CryptoBot token valid: {data['result']['name']}")
+        else:
+            logging.error(f"Invalid @CryptoBot token")
+            exit(1)
+    except Exception as e:
+        logging.error(f"Error checking @CryptoBot token: {e}")
+        exit(1)
+    
+    init_db_and_folders()
+    
+    application = Application.builder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.job_queue.run_once(init_products, when=5)
+    application.job_queue.run_repeating(check_pending_invoices, interval=60, first=10)
+    
+    logging.info("Starting bot polling...")
+    try:
+        application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
     except KeyboardInterrupt:
         logging.info("Bot stopped by user")
     except Exception as e:
-        logging.error(f"Critical error in asyncio.run: {e}")
+        logging.error(f"Critical error: {e}")
